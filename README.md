@@ -108,9 +108,20 @@ calls and calls between colleagues are never logged.
 
 | Secret | What to put in it |
 |---|---|
-| `ZIWO_INSTANCE` | The first part of the address you sign in to Ziwo at. For `hofmigration.ziwo.io`, type `hofmigration`. |
-| `ZIWO_API_KEY` | Your Ziwo API key. |
-| `ZIWO_USERNAME` and `ZIWO_PASSWORD` | Only needed if Ziwo refuses the key. Use an **admin or supervisor** Ziwo login, so everyone's calls are visible. |
+| `ZIWO_INSTANCE` | Your Ziwo **account name** — the one you type on the app.ziwo.io sign-in page. For HOF: `hof-biz` (not `app`). |
+| `ZIWO_USERNAME` | The name of a Ziwo **service account** made for this agent (see below), e.g. `call-log`. |
+| `ZIWO_PASSWORD` | That service account's password (Ziwo also calls it the key). |
+
+`ZIWO_API_KEY` is not needed: Ziwo has no separate API key. An app signs in with a service
+account, exactly as Ziwo's own Help Guide on the Service Accounts page shows.
+
+**Making the service account (once, about a minute):** in Ziwo, open the menu (☰) →
+**Company → Service Accounts → New Service Account**. Give it an account name such as
+`call-log`, the **Admin** role (so every consultant's calls are visible) and no expiry, and save.
+Ziwo shows the password **only once**: paste it straight into the `ZIWO_PASSWORD` secret.
+A service account is better than your own login: it never signs you out, and it keeps working
+when your password changes. If its password is ever lost or leaked, choose **Regenerate** on
+that account in Ziwo and update the secret.
 | `HUBSPOT_TOKEN` | The same HOF token your other agents use. |
 | `RESEND_KEY` | The same key your other reports send email with. |
 
@@ -151,8 +162,10 @@ You get an email that says why, and the run shows red in GitHub.
 
 | Message | What to do |
 |---|---|
-| *Ziwo refused the request… the ZIWO_API_KEY was not accepted* | Add `ZIWO_USERNAME` and `ZIWO_PASSWORD` for an admin or supervisor Ziwo login. |
-| *That Ziwo account cannot read the call history* | Use an admin or supervisor login. |
+| *Could not reach Ziwo… that address does not exist*, or *…which is Ziwo's sign-in page* | Set the `ZIWO_INSTANCE` secret to `hof-biz`, your Ziwo account name. |
+| *Ziwo sign-in failed (…)* | The message says what Ziwo answered. Check `ZIWO_USERNAME` is the service account's name exactly as Ziwo shows it, and `ZIWO_PASSWORD` its password. If unsure, choose **Regenerate** on the account in Ziwo and paste the new password into the secret. |
+| *ZIWO_API_KEY on its own is not something Ziwo accepts* | Make a service account and fill in `ZIWO_USERNAME` and `ZIWO_PASSWORD` (see Setting up). |
+| *That Ziwo account cannot read the call history* | Give the service account the **Admin** role. |
 | *HubSpot token is missing a permission* | In HubSpot, go to **Settings → Integrations → Private apps**, open the app, then **Scopes**. Tick the calls write permission (`crm.objects.calls.write`, or `crm.objects.contacts.write` on older apps) and choose **Commit changes**. The token stays the same. |
 | *N calls could not be logged* | Run it again for that date. Calls already saved are recognised. |
 | *Ziwo sent the same page twice* | Ziwo's paging changed. Send me the run's log. |
