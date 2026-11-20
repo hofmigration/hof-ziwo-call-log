@@ -1,10 +1,16 @@
 // 0-ziwo.js — reading Ziwo. Nothing in Ziwo is ever changed.
 //
-// Ziwo's API lives at https://<instance>-api.aswat.co, where <instance> is the first part
-// of the address you sign in to Ziwo at (hofmigration.ziwo.io -> hofmigration). Every
-// request carries an "access_token" header: ZIWO_API_KEY as given, or a token made by
-// signing in with ZIWO_USERNAME and ZIWO_PASSWORD. Use an admin or supervisor account, so
-// every consultant's calls are visible and not just one person's.
+// Ziwo's API lives at https://<account>-api.aswat.co, where <account> is the Ziwo account
+// name you type on the app.ziwo.io sign-in page — for HOF, hof-biz, so the API is
+// https://hof-biz-api.aswat.co.
+//
+// Signing in, as Ziwo's own guide says (Ziwo → Company → Service Accounts → Help Guide): an
+// app uses a SERVICE ACCOUNT. Its name and password go to POST /auth/login as JSON,
+//   { "username": "<account name>", "password": "<password>" }
+// and content.access_token from the answer is sent with every request, in an "access_token"
+// header. ZIWO_USERNAME and ZIWO_PASSWORD hold that name and password. (What Ziwo calls a
+// service account's "key" is its password.) Give it the Admin role, so every consultant's
+// calls are visible and not just one person's.
 const { SETTINGS } = require("./config");
 const { read } = require("./2-phone");
 
@@ -13,25 +19,51 @@ const first = (...v) => v.find((x) => x !== undefined && x !== null && x !== "")
 const str = (v) => (v === undefined || v === null ? "" : String(v).trim());
 const state = { base: null, token: null, from: "", requests: 0, retries: 0 };
 
+const ACCOUNT_HELP = "the Ziwo account name you type on the app.ziwo.io sign-in page (for HOF: hof-biz)";
 function baseUrl() {
   const v = str(process.env.ZIWO_INSTANCE);
-  if (!v) throw new Error("The ZIWO_INSTANCE secret is missing. It is the first part of your Ziwo address (hofmigration.ziwo.io -> hofmigration).");
+  if (!v) throw new Error(`The ZIWO_INSTANCE secret is missing. Put in ${ACCOUNT_HELP}.`);
   const m = v.match(/([a-z0-9][a-z0-9-]*?)(?:-api)?\.(?:aswat\.co|ziwo\.io)/i);
-  const name = m ? m[1] : v.replace(/^https?:\/\//i, "").replace(/[/:].*$/, "");
-  return `https://${name.toLowerCase()}-api.aswat.co`;
+  const name = (m ? m[1] : v.replace(/^https?:\/\//i, "").replace(/[/:].*$/, "")).toLowerCase();
+  // app.ziwo.io is Ziwo's sign-in page for everyone, not an account
+  if (/^(app|v1|www|admin|login)$/.test(name)) throw new Error(`The ZIWO_INSTANCE secret says "${v}", which is Ziwo's sign-in page, not your account. Put in ${ACCOUNT_HELP}.`);
+  return `https://${name}-api.aswat.co`;
+}
+// why Ziwo could not be reached, in words that say what to do
+function unreachable(e) {
+  const code = e && e.cause && e.cause.code;
+  if (code === "ENOTFOUND") return new Error(`Could not reach Ziwo at ${state.base}: that address does not exist. Check the ZIWO_INSTANCE secret is ${ACCOUNT_HELP}.`);
+  return new Error(`Could not reach Ziwo at ${state.base}: ${e.message}${code ? ` (${code})` : ""}`);
 }
 
+// what Ziwo said when it refused, if it said anything
+function ziwoSays(j) {
+  if (!j || typeof j !== "object") return "";
+  const c = j.content && typeof j.content === "object" ? j.content : {};
+  const m = [j.message, j.error, c.message, c.error, Array.isArray(j.errors) ? j.errors.map((e) => (e && e.message) || e).join("; ") : ""]
+    .find((x) => typeof x === "string" && x.trim());
+  return m ? m.replace(/\s+/g, " ").trim().slice(0, 160) : "";
+}
+
+const HOW_TO = "In Ziwo: menu → Company → Service Accounts → New Service Account (role Admin). Put its account name in ZIWO_USERNAME and its password in ZIWO_PASSWORD.";
+const password = () => str(process.env.ZIWO_PASSWORD) || str(process.env.ZIWO_API_KEY);   // a service account's "key" is its password
+
 async function signIn() {
-  const u = str(process.env.ZIWO_USERNAME), p = str(process.env.ZIWO_PASSWORD);
+  const u = str(process.env.ZIWO_USERNAME), p = password();
   if (!u || !p) return null;
-  const body = new URLSearchParams({ username: u, password: p, remember: "true", deviceType: "Web" });
-  const res = await fetch(`${state.base}/auth/login`, {
-    method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" }, body: body.toString(),
-  });
+  let res;
+  try {
+    res = await fetch(`${state.base}/auth/login`, {
+      method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json" }, body: JSON.stringify({ username: u, password: p }),
+    });
+  } catch (e) { throw unreachable(e); }
   const text = await res.text();
   let j = null; try { j = JSON.parse(text); } catch { /* not JSON */ }
   const t = j && j.content && j.content.access_token;
-  if (!res.ok || !t) throw new Error(`Ziwo sign-in failed (${res.status}). Check the ZIWO_USERNAME and ZIWO_PASSWORD secrets.`);
+  if (!res.ok || !t) {
+    const said = ziwoSays(j);
+    throw new Error(`Ziwo sign-in failed (${res.status}${said ? `: Ziwo said "${said}"` : ""}). Check ZIWO_USERNAME holds the service account's name exactly as Ziwo shows it, and ZIWO_PASSWORD its password. ${HOW_TO}`);
+  }
   state.from = "sign-in";
   return t;
 }
@@ -39,10 +71,11 @@ async function signIn() {
 async function token() {
   if (state.token) return state.token;
   if (!state.base) state.base = baseUrl();
+  // a service account's name and password: sign in, the way Ziwo's guide says
+  if (str(process.env.ZIWO_USERNAME) && password()) { state.token = await signIn(); return state.token; }
+  // an access token pasted in on its own
   if (str(process.env.ZIWO_API_KEY)) { state.token = str(process.env.ZIWO_API_KEY); state.from = "key"; return state.token; }
-  state.token = await signIn();
-  if (!state.token) throw new Error("Ziwo has no way in: add the ZIWO_API_KEY secret, or ZIWO_USERNAME and ZIWO_PASSWORD.");
-  return state.token;
+  throw new Error(`Ziwo has no way in: ZIWO_USERNAME and ZIWO_PASSWORD are not set. ${HOW_TO}`);
 }
 
 async function zget(path, params = {}, attempt = 0, renewed = false) {
@@ -53,18 +86,20 @@ async function zget(path, params = {}, attempt = 0, renewed = false) {
   try {
     res = await fetch(`${state.base}${path}${qs ? `?${qs}` : ""}`, { headers: { access_token: tok, Accept: "application/json" } });
   } catch (e) {
+    // an address that does not exist will not start existing on a second try
+    if (e && e.cause && e.cause.code === "ENOTFOUND") throw unreachable(e);
     if (attempt < 5) { state.retries++; await sleep(2000 * (attempt + 1)); return zget(path, params, attempt + 1, renewed); }
-    throw new Error(`Could not reach Ziwo at ${state.base}: ${e.message}`);
+    throw unreachable(e);
   }
   if (res.status === 401 || res.status === 403) {
-    // a key that has run out, or a token from an earlier sign-in: sign in again once
-    if (!renewed && str(process.env.ZIWO_USERNAME) && str(process.env.ZIWO_PASSWORD)) {
+    // a token that has run out: sign in again, once
+    if (!renewed && state.from === "sign-in") {
       state.token = await signIn();
       return zget(path, params, attempt, true);
     }
     const e = new Error(`Ziwo refused the request (${res.status}). ${state.from === "key"
-      ? "The ZIWO_API_KEY was not accepted - add ZIWO_USERNAME and ZIWO_PASSWORD of an admin or supervisor instead."
-      : "That Ziwo account cannot read the call history - it needs to be an admin or supervisor."}`);
+      ? `ZIWO_API_KEY on its own is not something Ziwo accepts. ${HOW_TO}`
+      : "That Ziwo account cannot read the call history - give the service account the Admin role."}`);
     e.status = res.status;
     throw e;
   }
@@ -174,4 +209,4 @@ async function calls(fromMs, toMs) {
   return { calls: [...byId.values()].sort((a, b) => a.start - b.start), read: rows.length, pages, dated, cappedOut };
 }
 
-module.exports = { agents, calls, callOf, agentOf, baseUrl, state, NUMBER_FIELDS };
+module.exports = { agents, calls, callOf, agentOf, baseUrl, token, state, NUMBER_FIELDS };
