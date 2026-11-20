@@ -1,0 +1,10 @@
+{
+  "name": "hof-ziwo-call-log",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Every morning: yesterday's Ziwo calls that are missing from HubSpot get logged, with their outcome.",
+  "type": "commonjs",
+  "engines": { "node": ">=20" },
+  "dependencies": { "exceljs": "^4.4.0", "libphonenumber-js": "^1.11.0" },
+  "scripts": { "start": "node run.js", "test": "node selftest.js" }
+}
