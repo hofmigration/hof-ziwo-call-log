@@ -1,0 +1,69 @@
+name: Ziwo call log
+
+on:
+  schedule:
+    # 03:47 UTC = 07:47 Dubai = 08:47 Pakistan, every day. It covers the day before, and
+    # finishes before the 11:00 reports, so they count the calls it logs. GitHub sometimes
+    # starts scheduled runs late; the day covered stays the same.
+    - cron: "47 3 * * *"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "dry-run = log nothing, email what it would log. live = log the missing calls."
+        required: true
+        type: choice
+        default: "dry-run"
+        options: ["dry-run", "live"]
+      from_date:
+        description: "First day to check, like 2026-11-17. Leave blank for yesterday."
+        required: false
+        default: ""
+        type: string
+      to_date:
+        description: "Last day to check (at most 31 days in one run). Leave blank for the same day."
+        required: false
+        default: ""
+        type: string
+      send_email:
+        description: "Email the result?"
+        required: true
+        type: choice
+        default: "true"
+        options: ["true", "false"]
+
+concurrency:
+  group: ziwo-call-log
+  cancel-in-progress: false
+
+jobs:
+  log:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm install --no-audit --no-fund
+      - name: Check the rules still work
+        run: node selftest.js
+      - name: Check yesterday's Ziwo calls against HubSpot
+        run: node run.js
+        env:
+          HUBSPOT_TOKEN: ${{ secrets.HUBSPOT_TOKEN }}
+          RESEND_KEY: ${{ secrets.RESEND_KEY }}
+          ZIWO_INSTANCE: ${{ secrets.ZIWO_INSTANCE }}
+          ZIWO_API_KEY: ${{ secrets.ZIWO_API_KEY }}
+          ZIWO_USERNAME: ${{ secrets.ZIWO_USERNAME }}
+          ZIWO_PASSWORD: ${{ secrets.ZIWO_PASSWORD }}
+          MODE: ${{ inputs.mode }}
+          FROM_DATE: ${{ inputs.from_date }}
+          TO_DATE: ${{ inputs.to_date }}
+          SEND_EMAIL: ${{ inputs.send_email }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ziwo-call-log
+          path: out/
+          retention-days: 7
+          if-no-files-found: ignore
