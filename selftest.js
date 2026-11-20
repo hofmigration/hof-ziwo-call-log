@@ -25,6 +25,54 @@ const uuid = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 
 if (require.main === module) (async () => {
   // ================================================================ numbers
+  await test("the Ziwo address comes from the account name, never from the sign-in page", () => {
+    const Zw = require("./0-ziwo");
+    const keep = process.env.ZIWO_INSTANCE;
+    const at = (v) => { process.env.ZIWO_INSTANCE = v; try { return Zw.baseUrl(); } catch (e) { return `ERROR ${e.message}`; } };
+    assert.strictEqual(at("hof-biz"), "https://hof-biz-api.aswat.co");
+    assert.strictEqual(at("https://hof-biz-api.aswat.co/"), "https://hof-biz-api.aswat.co");
+    assert.strictEqual(at("HOF-BIZ"), "https://hof-biz-api.aswat.co");
+    for (const v of ["app", "app.ziwo.io", "https://app.ziwo.io/", "https://v1.app.ziwo.io/admin"]) assert.match(at(v), /sign-in page, not your account.*hof-biz/, v);
+    if (keep === undefined) delete process.env.ZIWO_INSTANCE; else process.env.ZIWO_INSTANCE = keep;
+  });
+
+  await test("sign-in goes as JSON with the service account's name and password, and a refusal says why", async () => {
+    const Zw = require("./0-ziwo");
+    const keys = ["ZIWO_INSTANCE", "ZIWO_USERNAME", "ZIWO_PASSWORD", "ZIWO_API_KEY"];
+    const keep = { fetch: global.fetch, env: Object.fromEntries(keys.map((k) => [k, process.env[k]])) };
+    const sent = [];
+    global.fetch = async (url, opts = {}) => {
+      const u = new URL(url), h = opts.headers || {};
+      if (u.pathname === "/auth/login") {
+        sent.push({ type: h["Content-Type"], body: opts.body });
+        const b = JSON.parse(opts.body), ok = b.username === "call-log" && b.password === "right";
+        return { ok, status: ok ? 200 : 401, text: async () => JSON.stringify(ok ? { content: { access_token: "T" } } : { message: "Invalid credentials" }) };
+      }
+      const ok = h.access_token === "T";
+      return { ok, status: ok ? 200 : 401, text: async () => JSON.stringify(ok ? { content: [] } : { message: "Unauthorized" }) };
+    };
+    const fresh = (env) => { for (const k of keys) delete process.env[k]; Object.assign(process.env, { ZIWO_INSTANCE: "hof-biz" }, env); Object.assign(Zw.state, { base: null, token: null, from: "" }); };
+    const fails = async (fn) => { try { await fn(); return ""; } catch (e) { return e.message; } };
+    try {
+      fresh({ ZIWO_USERNAME: "call-log", ZIWO_PASSWORD: "right" });
+      assert.strictEqual(await Zw.token(), "T");
+      assert.strictEqual(sent[0].type, "application/json");
+      assert.deepStrictEqual(JSON.parse(sent[0].body), { username: "call-log", password: "right" });
+      fresh({ ZIWO_USERNAME: "call-log", ZIWO_API_KEY: "right" });                 // the service account's "key" is its password
+      assert.strictEqual(await Zw.token(), "T");
+      fresh({ ZIWO_USERNAME: "call-log", ZIWO_PASSWORD: "wrong" });
+      assert.match(await fails(() => Zw.token()), /sign-in failed \(401: Ziwo said "Invalid credentials"\).*Service Accounts/);
+      fresh({ ZIWO_API_KEY: "not-a-token" });
+      assert.match(await fails(() => Zw.calls(Date.parse("2026-11-17T00:00:00Z"), Date.parse("2026-11-18T00:00:00Z"))), /refused the request \(401\).*Service Accounts/);
+      fresh({});
+      assert.match(await fails(() => Zw.token()), /no way in.*Service Accounts/);
+    } finally {
+      global.fetch = keep.fetch;
+      for (const k of keys) { if (keep.env[k] === undefined) delete process.env[k]; else process.env[k] = keep.env[k]; }
+      Object.assign(Zw.state, { base: null, token: null, from: "" });
+    }
+  });
+
   await test("numbers are read however they are typed", () => {
     const e = (s) => (P.read(s) || {}).e164;
     for (const s of ["+971 50 123 4567", "00971501234567", "971501234567", "0501234567", "501234567", "+971 (0)50-123-4567"]) assert.strictEqual(e(s), "+971501234567", s);
@@ -469,9 +517,10 @@ function buildWorld() {
     // ---- Ziwo
     if (u.hostname === "hof-api.aswat.co") {
       if (u.pathname === "/auth/login") {
-        const p = new URLSearchParams(body);
-        if (p.get("username") === "admin@hof" && p.get("password") === "pw") { W.logins++; return reply(200, { content: { access_token: "TOKEN-1" } }); }
-        return reply(401, { error: "bad" });
+        // Ziwo reads a sign-in as JSON; anything else gets a 400, as the real one answered
+        if (!body || typeof body !== "object") return reply(400, { message: "username and password are required" });
+        if (body.username === "admin@hof" && body.password === "pw") { W.logins++; return reply(200, { content: { access_token: "TOKEN-1" } }); }
+        return reply(401, { message: "Invalid credentials" });
       }
       if ((opts.headers || {}).access_token !== "TOKEN-1") return reply(401, { error: "token" });
       if (u.pathname === "/callHistory/listAgents") return reply(200, { content: W.agents });
